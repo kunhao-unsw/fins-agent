@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -10,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import fintools.apps.fred as fred_module
 from fintools.apps import (
     SeriesSpec,
     add_nber_recession_vrects,
@@ -148,6 +151,9 @@ def test_clean_fred_graph_csv_handles_missing_dots() -> None:
 def test_read_fred_graph_csv_batches_after_decode_error(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
 
+    def fake_zip_url(url: str) -> pd.DataFrame:
+        raise ValueError(f"not a zip fixture: {url}")
+
     def fake_read_csv(source: str, *args, **kwargs) -> pd.DataFrame:
         ids = tuple(parse_qs(urlparse(source).query)["id"][0].split(","))
         calls.append(ids)
@@ -159,12 +165,42 @@ def test_read_fred_graph_csv_batches_after_decode_error(monkeypatch) -> None:
         return pd.DataFrame(data)
 
     monkeypatch.setattr(pd, "read_csv", fake_read_csv)
+    monkeypatch.setattr(fred_module, "_read_fred_zip_url", fake_zip_url)
     frame = read_fred_graph_csv(["FAIL", "OK"])
 
     assert ("FAIL", "OK") in calls
     assert ("FAIL",) in calls
     assert ("OK",) in calls
     assert list(frame.columns) == ["observation_date", "FAIL", "OK"]
+
+
+def test_read_fred_graph_csv_merges_zipped_graph_response(monkeypatch) -> None:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("daily.csv", "observation_date,DGS10\n2020-01-01,1.50\n")
+        archive.writestr("monthly.csv", "observation_date,UNRATE\n2020-01-01,3.50\n")
+
+    class FakeResponse:
+        content = payload.getvalue()
+
+        def raise_for_status(self) -> None:
+            return None
+
+    original_read_csv = pd.read_csv
+
+    def fake_read_csv(source, *args, **kwargs):
+        if isinstance(source, str) and source.startswith("https://fred.stlouisfed.org"):
+            raise UnicodeDecodeError("utf-8", b"\xfa", 0, 1, "invalid")
+        return original_read_csv(source, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", fake_read_csv)
+    monkeypatch.setattr(fred_module.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    frame = read_fred_graph_csv(["DGS10", "UNRATE"])
+
+    assert list(frame.columns) == ["observation_date", "DGS10", "UNRATE"]
+    assert frame.loc[0, "DGS10"] == pytest.approx(1.50)
+    assert frame.loc[0, "UNRATE"] == pytest.approx(3.50)
 
 
 def test_prepare_display_frame_uses_app_facing_labels() -> None:

@@ -50,6 +50,7 @@ from fins2026.week2.code.market_window import (  # noqa: E402
     WEEK2_FRED_WINDOW_YEARS,
     clip_dated_column_frame,
 )
+from fintools.apps import read_fred_graph_csv  # noqa: E402
 from fintools.datasets import load_validation_dataset  # noqa: E402
 
 
@@ -149,7 +150,7 @@ def download_fred_market_data(
 ) -> pd.DataFrame:
     """Download and clean the live FRED market-and-macro CSV."""
 
-    raw = pd.read_csv(url or fred_csv_url())
+    raw = read_fred_graph_csv(url or fred_csv_url())
     return clean_fred_market_data(raw, rolling_window=rolling_window)
 
 

@@ -43,6 +43,7 @@ from fins2026.week2.code.market_window import (  # noqa: E402
     WEEK2_FRED_LECTURE_START,
     WEEK2_FRED_WINDOW_YEARS,
 )
+from fintools.apps import read_fred_graph_csv  # noqa: E402
 
 
 def resolve_repo_path(path: str | Path, repo_root: Path = REPO_ROOT) -> Path:
@@ -107,7 +108,7 @@ def print_series_contracts() -> None:
 def load_live_raw_fred_frame() -> pd.DataFrame:
     """Read the live raw FRED graph CSV."""
 
-    return clean_raw_fred_frame(pd.read_csv(fred_csv_url()))
+    return clean_raw_fred_frame(read_fred_graph_csv(fred_csv_url()))
 
 
 def print_raw_summary(raw: pd.DataFrame, *, mode: str) -> None:

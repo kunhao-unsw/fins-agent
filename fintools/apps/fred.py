@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import pandas as pd
+import requests
 
 FRED_GRAPH_BASE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 FRED_BATCH_SIZE = 3
@@ -57,13 +60,44 @@ def _join_fred_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
     return joined.reset_index()
 
 
+def _read_fred_zip_url(url: str) -> pd.DataFrame:
+    """Read a FRED graph response that is delivered as a zip of CSV files."""
+
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    payload = io.BytesIO(response.content)
+    if not zipfile.is_zipfile(payload):
+        payload.seek(0)
+        return pd.read_csv(payload)
+
+    payload.seek(0)
+    with zipfile.ZipFile(payload) as archive:
+        frames = [
+            pd.read_csv(archive.open(name))
+            for name in archive.namelist()
+            if name.lower().endswith(".csv")
+        ]
+    return _join_fred_frames(frames)
+
+
 def _read_fred_series_batch(series: Sequence[str]) -> pd.DataFrame:
     clean = [str(item).strip().upper() for item in series if str(item).strip()]
     if not clean:
         raise ValueError("at least one FRED series is required")
+    url = fred_graph_url(clean)
+    if len(clean) > 1:
+        try:
+            return _read_fred_zip_url(url)
+        except Exception:
+            pass
     try:
-        return pd.read_csv(fred_graph_url(clean))
-    except UnicodeDecodeError:
+        return pd.read_csv(url)
+    except (UnicodeDecodeError, ValueError) as exc:
+        try:
+            return _read_fred_zip_url(url)
+        except Exception:
+            if len(clean) == 1:
+                raise exc
         if len(clean) == 1:
             raise
         midpoint = len(clean) // 2
@@ -79,6 +113,11 @@ def _read_fred_series(series: Sequence[str]) -> pd.DataFrame:
     clean = [str(item).strip().upper() for item in series if str(item).strip()]
     if not clean:
         raise ValueError("at least one FRED series is required")
+    try:
+        return _read_fred_series_batch(clean)
+    except Exception:
+        if len(clean) <= FRED_BATCH_SIZE:
+            raise
     frames = [
         _read_fred_series_batch(clean[start : start + FRED_BATCH_SIZE])
         for start in range(0, len(clean), FRED_BATCH_SIZE)
